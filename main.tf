@@ -2,16 +2,12 @@ data "aws_caller_identity" "current" {}
 
 data "aws_partition" "current" {}
 
-# Validate that the instance exists in the configured account and region.
-data "aws_instance" "monitored" {
-  instance_id = var.ec2_instance_id
-}
-
 locals {
-  alarm_name = "${var.name_prefix}-ec2-high-cpu"
+  function_name  = "${var.name_prefix}-demo"
+  alarm_name     = "${var.name_prefix}-lambda-errors"
+  log_group_name = "/aws/lambda/${local.function_name}"
 
-  # Build the ARN ahead of time to avoid a dependency cycle:
-  # alarm -> subscription -> topic policy -> alarm.
+  # Constructed independently to avoid a dependency cycle.
   alarm_arn = join("", [
     "arn:",
     data.aws_partition.current.partition,
@@ -24,15 +20,129 @@ locals {
   ])
 }
 
+resource "aws_cloudwatch_log_group" "lambda" {
+  name              = local.log_group_name
+  retention_in_days = 7
+}
+
+data "aws_iam_policy_document" "lambda_assume_role" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "sts:AssumeRole"
+    ]
+
+    principals {
+      type = "Service"
+
+      identifiers = [
+        "lambda.amazonaws.com"
+      ]
+    }
+  }
+}
+
+resource "aws_iam_role" "lambda" {
+  name               = "${var.name_prefix}-lambda-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+}
+
+data "aws_iam_policy_document" "lambda_logs" {
+  statement {
+    sid    = "WriteFunctionLogs"
+    effect = "Allow"
+
+    actions = [
+      "logs:CreateLogStream",
+      "logs:PutLogEvents"
+    ]
+
+    resources = [
+      "${aws_cloudwatch_log_group.lambda.arn}:*"
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "lambda_logs" {
+  name   = "${var.name_prefix}-write-logs"
+  role   = aws_iam_role.lambda.id
+  policy = data.aws_iam_policy_document.lambda_logs.json
+}
+
+data "archive_file" "lambda" {
+  type        = "zip"
+  output_path = "${path.module}/lambda-demo.zip"
+
+  source {
+    filename = "lambda_function.py"
+
+    content = <<-PYTHON
+      import json
+      import logging
+
+      logger = logging.getLogger()
+      logger.setLevel(logging.INFO)
+
+
+      def lambda_handler(event, context):
+          if not isinstance(event, dict):
+              raise ValueError("Expected a JSON object")
+
+          logger.info(
+              "Demo invocation: %s",
+              json.dumps({
+                  "request_id": context.aws_request_id,
+                  "event": event
+              })
+          )
+
+          if event.get("fail", False) is True:
+              logger.error("Deliberate failure for Harness AI SRE lab")
+              raise RuntimeError(
+                  "Harness AI SRE demo: intentional Lambda failure"
+              )
+
+          return {
+              "statusCode": 200,
+              "body": json.dumps({
+                  "message": "Harness AI SRE demo: successful invocation",
+                  "request_id": context.aws_request_id
+              })
+          }
+    PYTHON
+  }
+}
+
+resource "aws_lambda_function" "demo" {
+  function_name = local.function_name
+  description   = "Harness AI SRE lab: success or deliberate failure."
+
+  role    = aws_iam_role.lambda.arn
+  runtime = "python3.12"
+  handler = "lambda_function.lambda_handler"
+
+  filename         = data.archive_file.lambda.output_path
+  source_code_hash = data.archive_file.lambda.output_base64sha256
+
+  memory_size = 128
+  timeout     = 10
+
+  depends_on = [
+    aws_iam_role_policy.lambda_logs,
+    aws_cloudwatch_log_group.lambda
+  ]
+}
+
 resource "aws_sns_topic" "harness" {
   name         = "${var.name_prefix}-alerts"
-  display_name = "Harness AI SRE Alerts"
+  display_name = "Harness AI SRE Lab"
   fifo_topic   = false
 }
 
 data "aws_iam_policy_document" "sns" {
   statement {
-    sid    = "AllowCloudWatchAlarmPublish"
+    sid    = "AllowLabAlarmPublish"
     effect = "Allow"
 
     actions = [
@@ -83,17 +193,15 @@ resource "aws_sns_topic_subscription" "harness" {
   protocol  = "https"
   endpoint  = var.harness_webhook_url
 
-  # Preserve the SNS envelope, including its Message field.
   raw_message_delivery = false
 
-  # This declares endpoint capability; it does NOT confirm on its behalf.
   endpoint_auto_confirms          = true
   confirmation_timeout_in_minutes = 5
 
   lifecycle {
     precondition {
       condition     = length(trimspace(var.harness_webhook_url)) > 0
-      error_message = "Set harness_webhook_url before enabling the subscription."
+      error_message = "Provide harness_webhook_url before enabling the subscription."
     }
   }
 
@@ -102,24 +210,26 @@ resource "aws_sns_topic_subscription" "harness" {
   ]
 }
 
-resource "aws_cloudwatch_metric_alarm" "cpu" {
-  alarm_name        = local.alarm_name
-  alarm_description = "EC2 CPU utilization above ${var.cpu_threshold}% for two consecutive 5-minute periods."
+resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
+  alarm_name = local.alarm_name
 
-  namespace   = "AWS/EC2"
-  metric_name = "CPUUtilization"
-  statistic   = "Average"
-  unit        = "Percent"
+  alarm_description = "Harness lab: at least one Lambda error in a one-minute period."
 
-  period              = 300
-  evaluation_periods  = 2
-  datapoints_to_alarm  = 2
-  threshold           = var.cpu_threshold
-  comparison_operator = "GreaterThanThreshold"
-  treat_missing_data  = "notBreaching"
+  namespace   = "AWS/Lambda"
+  metric_name = "Errors"
+  statistic   = "Sum"
+  unit        = "Count"
+
+  period              = 60
+  evaluation_periods  = 1
+  datapoints_to_alarm  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+
+  treat_missing_data = "notBreaching"
 
   dimensions = {
-    InstanceId = data.aws_instance.monitored.id
+    FunctionName = aws_lambda_function.demo.function_name
   }
 
   actions_enabled = true

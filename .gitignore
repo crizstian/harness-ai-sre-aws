@@ -4,5 +4,7 @@
 *.tfplan
 *.tfvars
 *.tfvars.json
+lambda-demo.zip
+response-*.json
 crash.log
 crash.*.log
