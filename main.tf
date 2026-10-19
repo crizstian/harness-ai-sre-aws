@@ -196,7 +196,7 @@ resource "aws_sns_topic_subscription" "harness" {
   raw_message_delivery = false
 
   endpoint_auto_confirms          = true
-  confirmation_timeout_in_minutes = 5
+  confirmation_timeout_in_minutes = 20
 
   lifecycle {
     precondition {
