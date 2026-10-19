@@ -3,9 +3,11 @@ data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
 locals {
-  function_name  = "${var.name_prefix}-demo"
-  alarm_name     = "${var.name_prefix}-lambda-errors"
-  log_group_name = "/aws/lambda/${local.function_name}"
+  function_name      = "${var.name_prefix}-demo"
+  forwarder_name     = "${var.name_prefix}-forwarder"
+  alarm_name         = "${var.name_prefix}-lambda-errors"
+  log_group_name     = "/aws/lambda/${local.function_name}"
+  forwarder_log_group = "/aws/lambda/${local.forwarder_name}"
 
   # Constructed independently to avoid a dependency cycle.
   alarm_arn = join("", [
@@ -19,6 +21,10 @@ locals {
     local.alarm_name
   ])
 }
+
+# =============================================================================
+# Demo Lambda (success / deliberate failure)
+# =============================================================================
 
 resource "aws_cloudwatch_log_group" "lambda" {
   name              = local.log_group_name
@@ -134,6 +140,10 @@ resource "aws_lambda_function" "demo" {
   ]
 }
 
+# =============================================================================
+# SNS Topic + Alarm
+# =============================================================================
+
 resource "aws_sns_topic" "harness" {
   name         = "${var.name_prefix}-alerts"
   display_name = "Harness AI SRE Lab"
@@ -186,29 +196,150 @@ resource "aws_sns_topic_policy" "harness" {
   policy = data.aws_iam_policy_document.sns.json
 }
 
-resource "aws_sns_topic_subscription" "harness" {
+# =============================================================================
+# Forwarder Lambda (SNS → Harness webhook with Content-Type: application/json)
+# =============================================================================
+
+resource "aws_cloudwatch_log_group" "forwarder" {
+  name              = local.forwarder_log_group
+  retention_in_days = 7
+}
+
+resource "aws_iam_role" "forwarder" {
+  name               = "${var.name_prefix}-forwarder-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+}
+
+data "aws_iam_policy_document" "forwarder_logs" {
+  statement {
+    sid    = "WriteForwarderLogs"
+    effect = "Allow"
+
+    actions = [
+      "logs:CreateLogStream",
+      "logs:PutLogEvents"
+    ]
+
+    resources = [
+      "${aws_cloudwatch_log_group.forwarder.arn}:*"
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "forwarder_logs" {
+  name   = "${var.name_prefix}-forwarder-write-logs"
+  role   = aws_iam_role.forwarder.id
+  policy = data.aws_iam_policy_document.forwarder_logs.json
+}
+
+data "archive_file" "forwarder" {
+  type        = "zip"
+  output_path = "${path.module}/lambda-forwarder.zip"
+
+  source {
+    filename = "forwarder.py"
+
+    content = <<-PYTHON
+      import json
+      import logging
+      import urllib.request
+
+      logger = logging.getLogger()
+      logger.setLevel(logging.INFO)
+
+      import os
+      WEBHOOK_URL = os.environ["HARNESS_WEBHOOK_URL"]
+
+
+      def lambda_handler(event, context):
+          for record in event.get("Records", []):
+              message = record.get("Sns", {}).get("Message", "")
+
+              try:
+                  payload = json.loads(message)
+              except (json.JSONDecodeError, TypeError):
+                  payload = {"raw": message}
+
+              body = json.dumps(payload).encode("utf-8")
+
+              logger.info(
+                  "Forwarding to Harness: %s",
+                  json.dumps({
+                      "alarm_name": payload.get("AlarmName"),
+                      "state": payload.get("NewStateValue"),
+                      "bytes": len(body)
+                  })
+              )
+
+              req = urllib.request.Request(
+                  WEBHOOK_URL,
+                  data=body,
+                  headers={"Content-Type": "application/json"},
+                  method="POST"
+              )
+
+              with urllib.request.urlopen(req, timeout=10) as resp:
+                  logger.info("Harness responded: %d", resp.status)
+
+          return {"statusCode": 200}
+    PYTHON
+  }
+}
+
+resource "aws_lambda_function" "forwarder" {
   count = var.enable_harness_subscription ? 1 : 0
 
-  topic_arn = aws_sns_topic.harness.arn
-  protocol  = "https"
-  endpoint  = var.harness_webhook_url
+  function_name = local.forwarder_name
+  description   = "Forwards SNS CloudWatch alerts to Harness with Content-Type: application/json."
 
-  raw_message_delivery = true
+  role    = aws_iam_role.forwarder.arn
+  runtime = "python3.12"
+  handler = "forwarder.lambda_handler"
 
-  endpoint_auto_confirms          = true
-  confirmation_timeout_in_minutes = 20
+  filename         = data.archive_file.forwarder.output_path
+  source_code_hash = data.archive_file.forwarder.output_base64sha256
 
-  lifecycle {
-    precondition {
-      condition     = length(trimspace(var.harness_webhook_url)) > 0
-      error_message = "Provide harness_webhook_url before enabling the subscription."
+  memory_size = 128
+  timeout     = 15
+
+  environment {
+    variables = {
+      HARNESS_WEBHOOK_URL = var.harness_webhook_url
     }
   }
 
   depends_on = [
+    aws_iam_role_policy.forwarder_logs,
+    aws_cloudwatch_log_group.forwarder
+  ]
+}
+
+resource "aws_lambda_permission" "sns_invoke_forwarder" {
+  count = var.enable_harness_subscription ? 1 : 0
+
+  statement_id  = "AllowSNSInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.forwarder[0].function_name
+  principal     = "sns.amazonaws.com"
+  source_arn    = aws_sns_topic.harness.arn
+}
+
+resource "aws_sns_topic_subscription" "harness" {
+  count = var.enable_harness_subscription ? 1 : 0
+
+  topic_arn = aws_sns_topic.harness.arn
+  protocol  = "lambda"
+  endpoint  = aws_lambda_function.forwarder[0].arn
+
+  depends_on = [
+    aws_lambda_permission.sns_invoke_forwarder,
     aws_sns_topic_policy.harness
   ]
 }
+
+# =============================================================================
+# CloudWatch Alarm
+# =============================================================================
 
 resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
   alarm_name = local.alarm_name

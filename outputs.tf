@@ -33,6 +33,22 @@ output "sns_topic_arn" {
   value       = aws_sns_topic.harness.arn
 }
 
+output "forwarder_function_name" {
+  description = "Name of the forwarder Lambda, if enabled."
+  value = try(
+    aws_lambda_function.forwarder[0].function_name,
+    null
+  )
+}
+
+output "forwarder_function_arn" {
+  description = "ARN of the forwarder Lambda, if enabled."
+  value = try(
+    aws_lambda_function.forwarder[0].arn,
+    null
+  )
+}
+
 output "harness_subscription_enabled" {
   description = "Whether the Harness subscription is configured."
   value       = var.enable_harness_subscription
