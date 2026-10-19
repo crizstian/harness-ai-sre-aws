@@ -193,7 +193,7 @@ resource "aws_sns_topic_subscription" "harness" {
   protocol  = "https"
   endpoint  = var.harness_webhook_url
 
-  raw_message_delivery = false
+  raw_message_delivery = true
 
   endpoint_auto_confirms          = true
   confirmation_timeout_in_minutes = 20
