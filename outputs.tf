@@ -63,6 +63,21 @@ output "harness_subscription_arn" {
 }
 
 # =============================================================================
+# S3 Artifacts (Harness CD)
+# =============================================================================
+
+output "artifacts_bucket_name" {
+  description = "S3 bucket for Lambda deployment artifacts."
+  value       = aws_s3_bucket.artifacts.id
+}
+
+output "artifacts_bucket_arn" {
+  description = "ARN of the artifacts S3 bucket."
+  value       = aws_s3_bucket.artifacts.arn
+}
+
+
+# =============================================================================
 # Dash0
 # =============================================================================
 
