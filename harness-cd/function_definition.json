@@ -1,0 +1,19 @@
+{
+  "functionName": "harness-ai-sre-lab-demo",
+  "runtime": "python3.12",
+  "handler": "lambda_function.lambda_handler",
+  "architectures": ["x86_64"],
+  "memorySize": 128,
+  "timeout": 10,
+  "description": "Harness AI SRE lab: success or deliberate failure.",
+  "layers": [
+    "arn:aws:lambda:us-west-2:115813213817:layer:dash0-extension-python:26"
+  ],
+  "environment": {
+    "variables": {
+      "AWS_LAMBDA_EXEC_WRAPPER": "/opt/wrapper",
+      "DASH0_ENDPOINT": "https://ingress.us-west-2.aws.dash0.com",
+      "DASH0_DATASET": "default"
+    }
+  }
+}
