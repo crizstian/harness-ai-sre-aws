@@ -134,6 +134,22 @@ resource "aws_lambda_function" "demo" {
   memory_size = 128
   timeout     = 10
 
+  layers = var.enable_dash0 ? [
+    "arn:aws:lambda:${var.aws_region}:115813213817:layer:dash0-extension-python:26"
+  ] : []
+
+  dynamic "environment" {
+    for_each = var.enable_dash0 ? [1] : []
+    content {
+      variables = {
+        AWS_LAMBDA_EXEC_WRAPPER = "/opt/wrapper"
+        DASH0_ENDPOINT          = var.dash0_endpoint
+        DASH0_TOKEN             = var.dash0_token
+        DASH0_DATASET           = var.dash0_dataset
+      }
+    }
+  }
+
   depends_on = [
     aws_iam_role_policy.lambda_logs,
     aws_cloudwatch_log_group.lambda

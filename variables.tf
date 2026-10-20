@@ -41,3 +41,40 @@ variable "notify_on_recovery" {
   type        = bool
   default     = false
 }
+
+# =============================================================================
+# Dash0 OpenTelemetry Instrumentation
+# =============================================================================
+
+variable "enable_dash0" {
+  description = "Enable Dash0 OpenTelemetry instrumentation on the demo Lambda."
+  type        = bool
+  default     = false
+}
+
+variable "dash0_token" {
+  description = "Dash0 authentication token."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "dash0_endpoint" {
+  description = "Dash0 OTLP HTTP ingestion endpoint (base URL, no path)."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.dash0_endpoint == "" ||
+      can(regex("^https://[^[:space:]]+$", var.dash0_endpoint))
+    )
+    error_message = "Provide an HTTPS URL without spaces, or leave it empty."
+  }
+}
+
+variable "dash0_dataset" {
+  description = "Dash0 dataset name."
+  type        = string
+  default     = "default"
+}

@@ -5,6 +5,7 @@
 *.tfvars
 *.tfvars.json
 lambda-demo.zip
+lambda-forwarder.zip
 response-*.json
 crash.log
 crash.*.log

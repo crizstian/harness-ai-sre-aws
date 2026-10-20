@@ -61,3 +61,17 @@ output "harness_subscription_arn" {
     null
   )
 }
+
+# =============================================================================
+# Dash0
+# =============================================================================
+
+output "dash0_instrumented" {
+  description = "Whether the demo Lambda has Dash0 OTel instrumentation."
+  value       = var.enable_dash0
+}
+
+output "dash0_layer_arn" {
+  description = "Dash0 Lambda Extension layer ARN, if enabled."
+  value       = var.enable_dash0 ? "arn:aws:lambda:${var.aws_region}:115813213817:layer:dash0-extension-python:26" : null
+}
