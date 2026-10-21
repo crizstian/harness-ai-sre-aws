@@ -1,7 +1,7 @@
 import json
 import logging
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
