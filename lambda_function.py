@@ -1,6 +1,8 @@
 import json
 import logging
 
+VERSION = "2.0.0"
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -12,6 +14,7 @@ def lambda_handler(event, context):
     logger.info(
         "Demo invocation: %s",
         json.dumps({
+            "version": VERSION,
             "request_id": context.aws_request_id,
             "event": event
         })
@@ -27,6 +30,7 @@ def lambda_handler(event, context):
         "statusCode": 200,
         "body": json.dumps({
             "message": "Harness AI SRE demo: successful invocation",
+            "version": VERSION,
             "request_id": context.aws_request_id
         })
     }
